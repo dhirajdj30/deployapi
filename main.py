@@ -1,23 +1,18 @@
-from typing import Optional
-
-from fastapi import FastAPI
+import os
+import pickle
+import numpy as np
+import pandas as pd
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional
+import google.generativeai as genai
+from summary import process_upload
 
 app = FastAPI()
 
-import pickle
-import os
-import numpy as np
-import pandas as pd
-from flask import Flask, request, jsonify
-from summary import process_upload
-import google.generativeai as genai
+# Configure Gemini API
 API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(API_KEY)
-port = os.getenv("PORT", 4000)
-# Load the model
-# Initialize the Flask application
-app = Flask(__name__)
-
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 model_path = './svc.pkl'  # Change this to the actual path where your model is saved
@@ -93,57 +88,33 @@ diseases_list = {
     25: 'Hypoglycemia', 31: 'Osteoarthritis', 5: 'Arthritis', 0: '(vertigo) Paroxysmal Positional Vertigo',
     2: 'Acne', 38: 'Urinary tract infection', 35: 'Psoriasis', 27: 'Impetigo'
 }
-
-# generate the summary
 def get_summary(extracted_text):
-    
-    # Make the request to the Gemini API
     response = model.generate_content(f"Give the Summary for the PDF File extracted text: {extracted_text}")
     return response.text
 
-# Define prediction function
 def given_predicted_value(patient_symptoms):
     input_vector = np.zeros(len(symptoms_dict))
     for item in patient_symptoms:
         input_vector[symptoms_dict[item]] = 1
     return diseases_list[svc.predict([input_vector])[0]]
 
-# Define helper function for detailed info
 def helper(predicted_disease):
     desc = description[description['Disease'] == predicted_disease]['Description'].values
-    desc = " ".join(desc) if desc else "No description available."
-
-    # Check if 'Disease' exists in precautions DataFrame
-    if 'Disease' in precautions.columns:
-        pre = precautions[precautions['Disease'] == predicted_disease].iloc[:, 1:6]
-    else:
-        pre = pd.DataFrame()  # Create an empty DataFrame if 'Disease' doesn't exist
-
+    desc = " ".join(desc) if desc.size > 0 else "No description available."
+    
+    pre = precautions[precautions['Disease'] == predicted_disease].iloc[:, 1:6]
     pre_list = pre.dropna().values.flatten().tolist()
-
-    # Repeat similar checks for medications, diets, and workout DataFrames
-    if 'Disease' in medications.columns:
-        med = medications[medications['Disease'] == predicted_disease].iloc[:, 1:6]
-    else:
-        med = pd.DataFrame()
-
+    
+    med = medications[medications['Disease'] == predicted_disease].iloc[:, 1:6]
     med_list = med.dropna().values.flatten().tolist()
-
-    if 'Disease' in diets.columns:
-        diet = diets[diets['Disease'] == predicted_disease].iloc[:, 1:6]
-    else:
-        diet = pd.DataFrame()
-
+    
+    diet = diets[diets['Disease'] == predicted_disease].iloc[:, 1:6]
     diet_list = diet.dropna().values.flatten().tolist()
-
-    if 'Disease' in workout.columns:
-        workout_info = workout[workout['Disease'] == predicted_disease].iloc[:, 1:6]
-    else:
-        workout_info = pd.DataFrame()
-
+    
+    workout_info = workout[workout['Disease'] == predicted_disease].iloc[:, 1:6]
     workout_list = workout_info.dropna().values.flatten().tolist()
-
-    response = {
+    
+    return {
         'disease': predicted_disease,
         'description': desc,
         'precautions': pre_list,
@@ -151,46 +122,40 @@ def helper(predicted_disease):
         'workout': workout_list,
         'diets': diet_list
     }
+
+class Symptoms(BaseModel):
+    symptoms: List[str]
+
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
+
+@app.get("/items/{item_id}")
+def read_item(item_id: int, q: Optional[str] = None):
+    return {"item_id": item_id, "q": q}
+
+@app.post('/predict')
+async def predict(symptoms: Symptoms):
+    predicted_disease = given_predicted_value(symptoms.symptoms)
+    response = helper(predicted_disease)
     return response
 
-# Define the route for prediction
-@app.route('/predict', methods=['POST'])
-def predict():
-    data = request.get_json()
-    symptoms = data.get('symptoms', [])
-    
-    predicted_disease = given_predicted_value(symptoms)
-    response = helper(predicted_disease)
-    
-    return jsonify(response)
-
-
-@app.route('/summarize', methods=['POST'])
-def summarize():
+@app.post('/summarize')
+async def summarize(file: UploadFile = File(None), text: Optional[str] = None):
     try:
-        # Check if the request has a file
-        if 'file' in request.files:
-            file = request.files['file']
-            if file.filename == '':
-                return jsonify({"error": "No selected file"}), 400
-            
-            # Extract text from the PDF file
-            extracted_text, summary = process_upload(file)
-        
-        # Check if the request has text data
-        elif 'text' in request.json:
-            extracted_text = request.json.get('text')
-            if not extracted_text:
-                return jsonify({"error": "No text provided"}), 400
+        if file:
+            extracted_text, _ = process_upload(file.file)
+        elif text:
+            extracted_text = text
         else:
-            return jsonify({"error": "No file or text provided"}), 400
+            raise HTTPException(status_code=400, detail="No file or text provided")
         
-        # Get the summary
         summary = get_summary(extracted_text)
-        
-        return jsonify({"summary": summary})
+        return {"summary": summary}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=port)
+    import uvicorn
+    port = int(os.getenv("PORT", 4000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
