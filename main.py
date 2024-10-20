@@ -154,8 +154,3 @@ async def summarize(file: UploadFile = File(None), text: Optional[str] = None):
         return {"summary": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == '__main__':
-    import uvicorn
-    port = int(os.getenv("PORT", 4000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
