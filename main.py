@@ -7,9 +7,17 @@ from pydantic import BaseModel
 from typing import List, Optional
 import google.generativeai as genai
 from summary import process_upload
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
+    app.add_middleware(
+       CORSMiddleware,
+       allow_origins=["*"],  # Allows all origins
+       allow_credentials=True,
+       allow_methods=["*"],  # Allows all methods
+       allow_headers=["*"],  # Allows all headers
+   )
 # Configure Gemini API
 API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(API_KEY)
